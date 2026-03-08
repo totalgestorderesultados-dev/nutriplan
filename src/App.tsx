@@ -92,6 +92,19 @@ const calculateDayMacros = (day: DayPlan, foods: Food[]) => {
   }, { calories: 0, protein: 0 });
 };
 
+const getDisplayQuantity = (food: Food, quantity: number) => {
+  if (food.unit.includes('100')) {
+    return Math.round(quantity * 100);
+  }
+  return quantity;
+};
+
+const getDisplayUnit = (food: Food) => {
+  if (food.unit === '100g') return 'g';
+  if (food.unit === '100ml') return 'ml';
+  return food.unit;
+};
+
 // --- Main Component ---
 
 export default function App() {
@@ -135,8 +148,23 @@ export default function App() {
     const proteinSource = [...mealFoods].sort((a, b) => (b.protein / b.calories) - (a.protein / a.calories))[0];
     const others = mealFoods.filter(f => f.id !== proteinSource.id);
 
-    // Atribui uma quantidade base pequena para todos (0.2 unidades ou 20g)
-    const items: MealItem[] = mealFoods.map(f => ({ foodId: f.id, quantity: 0.2 }));
+    // Define limites de quantidade para coerência (em unidades de 100g ou unidades inteiras)
+    const getConstraints = (food: Food) => {
+      const name = food.name.toLowerCase();
+      if (name.includes('carne') || name.includes('frango')) return { min: 0.8, max: 2.5 };
+      if (name.includes('abacate') || name.includes('coco') || name.includes('castanha')) return { min: 0.2, max: 0.8 };
+      if (name.includes('ovo')) return { min: 1, max: 4 };
+      if (name.includes('queijo')) return { min: 0.2, max: 0.6 };
+      if (name.includes('fruta') || name.includes('morango')) return { min: 0.5, max: 2.0 };
+      if (name.includes('iogurte') || name.includes('leite')) return { min: 1.0, max: 3.0 };
+      return { min: 0.2, max: 2.0 };
+    };
+
+    // Atribui uma quantidade base mínima para todos
+    const items: MealItem[] = mealFoods.map(f => ({ 
+      foodId: f.id, 
+      quantity: getConstraints(f).min 
+    }));
 
     const getTotals = (currentItems: MealItem[]) => {
       return currentItems.reduce((acc, item) => {
@@ -153,16 +181,20 @@ export default function App() {
     const pIdx = items.findIndex(it => it.foodId === proteinSource.id);
     const neededProtein = targetProtein - totals.protein;
     if (neededProtein > 0) {
-      items[pIdx].quantity += neededProtein / proteinSource.protein;
+      const constraints = getConstraints(proteinSource);
+      const addedQty = neededProtein / proteinSource.protein;
+      items[pIdx].quantity = Math.min(constraints.max, items[pIdx].quantity + addedQty);
     }
 
-    // Ajusta a fonte de energia (menor ratio proteína/caloria) para atingir a meta de calorias
+    // Ajusta a fonte de energia para atingir a meta de calorias
     totals = getTotals(items);
     const energySource = others.sort((a, b) => (a.protein / a.calories) - (b.protein / b.calories))[0];
     const eIdx = items.findIndex(it => it.foodId === energySource.id);
     const neededCals = targetCals - totals.calories;
     if (neededCals > 0) {
-      items[eIdx].quantity += neededCals / energySource.calories;
+      const constraints = getConstraints(energySource);
+      const addedQty = neededCals / energySource.calories;
+      items[eIdx].quantity = Math.min(constraints.max, items[eIdx].quantity + addedQty);
     }
 
     return {
@@ -222,6 +254,30 @@ export default function App() {
     const newPlan = [...weeklyPlan];
     newPlan[dayIdx].meals[mealIdx].items.push({ foodId, quantity: 1 });
     setWeeklyPlan(newPlan);
+  };
+
+  const copyToWhatsApp = () => {
+    if (!currentDay) return;
+    
+    let text = `*🍎 NutriPlan - Cardápio: ${currentDay.name}*\n\n`;
+    
+    currentDay.meals.forEach(meal => {
+      const macros = calculateMealMacros(meal, foods);
+      text += `*${meal.name.toUpperCase()}*\n`;
+      meal.items.forEach(item => {
+        const food = foods.find(f => f.id === item.foodId);
+        if (food) {
+          text += `- ${food.name}: ${getDisplayQuantity(food, item.quantity)}${getDisplayUnit(food)}\n`;
+        }
+      });
+      text += `_Total: ${Math.round(macros.calories)}kcal | ${Math.round(macros.protein)}g P_\n\n`;
+    });
+    
+    text += `*💧 Hidratação:* ${currentDay.waterConsumed.toFixed(2)}L / ${goals.water.toFixed(2)}L\n`;
+    text += `*📊 Total Dia:* ${Math.round(dayMacros.calories)}kcal | ${Math.round(dayMacros.protein)}g P`;
+
+    const encodedText = encodeURIComponent(text);
+    window.open(`https://wa.me/?text=${encodedText}`, '_blank');
   };
 
   const currentDay = weeklyPlan[selectedDayIndex];
@@ -309,7 +365,15 @@ export default function App() {
               <Calendar size={16} />
               Progresso: {currentDay.name}
             </h2>
-            <div className="flex gap-1 overflow-x-auto pb-2 no-scrollbar">
+            <button 
+              onClick={copyToWhatsApp}
+              className="text-[10px] font-bold uppercase bg-emerald-50 text-emerald-600 px-3 py-1.5 rounded-full flex items-center gap-1 border border-emerald-100"
+            >
+              <Save size={12} />
+              WhatsApp
+            </button>
+          </div>
+          <div className="flex gap-1 overflow-x-auto pb-2 no-scrollbar">
               {DAYS_OF_WEEK.map((day, idx) => (
                 <button
                   key={day}
@@ -324,7 +388,6 @@ export default function App() {
                 </button>
               ))}
             </div>
-          </div>
 
           <div className="grid gap-4">
             {/* Calorie Progress */}
@@ -466,12 +529,16 @@ export default function App() {
                                       <div className="flex items-center gap-1">
                                         <input 
                                           type="number"
-                                          step="0.1"
-                                          value={item.quantity}
-                                          onChange={(e) => updateItemQuantity(dayIdx, mealIdx, itemIdx, Number(e.target.value))}
-                                          className="w-12 bg-white border border-slate-200 rounded px-1 py-0.5 text-[10px] font-mono text-center"
+                                          step={food.unit.includes('100') ? "1" : "0.1"}
+                                          value={getDisplayQuantity(food, item.quantity)}
+                                          onChange={(e) => {
+                                            const val = Number(e.target.value);
+                                            const newQty = food.unit.includes('100') ? val / 100 : val;
+                                            updateItemQuantity(dayIdx, mealIdx, itemIdx, newQty);
+                                          }}
+                                          className="w-14 bg-white border border-slate-200 rounded px-1 py-0.5 text-[10px] font-mono text-center"
                                         />
-                                        <span className="text-[10px] text-slate-400">{food.unit}</span>
+                                        <span className="text-[10px] text-slate-400">{getDisplayUnit(food)}</span>
                                       </div>
                                     </div>
                                     <div className="flex items-center gap-3">
