@@ -1,0 +1,5 @@
+{
+  "name": "NutriPlan - Planejador Alimentar Inteligente",
+  "description": "Aplicativo para planejamento de refeições, controle de macros e hidratação com geração automática de cardápios.",
+  "requestFramePermissions": []
+}
